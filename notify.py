@@ -15,7 +15,7 @@ import argparse
 import os
 import smtplib
 import ssl
-from datetime import date
+from datetime import date, datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
