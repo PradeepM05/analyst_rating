@@ -13,7 +13,7 @@ Output: digests/digest_YYYY-MM-DD.md
 """
 import argparse
 import json
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 import config
@@ -21,6 +21,8 @@ import db
 import score as scorer
 
 DIGEST_DIR = Path(__file__).parent / "digests"
+from zoneinfo import ZoneInfo  # add to imports
+
 
 
 def load_events(conn, start: str, end: str):
@@ -120,7 +122,7 @@ def build_narrative(rows) -> str:
 
 
 def run(target_date: str = None, days: int = 1, narrative: bool = False) -> Path:
-    end = target_date or date.today().isoformat()
+    end = target_date or datetime.now(ZoneInfo("America/New_York")).date().isoformat()
     start = (date.fromisoformat(end) - timedelta(days=days - 1)).isoformat()
 
     with db.connect() as conn:
