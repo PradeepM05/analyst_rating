@@ -1,0 +1,10 @@
+.env
+.env.*
+!.env.example
+ratings.db
+*.db-wal
+*.db-shm
+__pycache__/
+*.pyc
+venv/
+files (1).zip

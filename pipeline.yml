@@ -1,0 +1,56 @@
+name: analyst-ratings-pipeline
+
+on:
+  schedule:
+    # GitHub cron is UTC. Sept = EDT (UTC-4): 10:00-15:00 UTC = 6:00-11:00 AM ET.
+    # Light ingest+score pulls every 30 min through the analyst-note window:
+    - cron: '0,30 10-14 * * 1-5'
+    - cron: '0 15 * * 1-5'
+    # Final full run (enrich + digest + email) at 15:30 UTC = 11:30 AM ET:
+    - cron: '30 15 * * 1-5'
+  workflow_dispatch:        # manual "Run workflow" button for testing
+
+permissions:
+  contents: write           # needed to commit ratings.db back
+
+concurrency:
+  group: pipeline           # never two runs writing the DB at once
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Final run = the 15:30 UTC schedule or a manual dispatch; else light run.
+      - name: Decide run mode
+        id: mode
+        run: |
+          if [ "${{ github.event.schedule }}" = "30 15 * * 1-5" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "flags=--email" >> "$GITHUB_OUTPUT"
+          else
+            echo "flags=--ingest-only" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run pipeline
+        env:
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: python run_daily.py ${{ steps.mode.outputs.flags }}
+
+      - name: Commit DB + digests back
+        if: always()          # persist whatever we ingested even if a later stage failed
+        run: |
+          git config user.name  "ratings-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add ratings.db digests/ || true
+          git diff --cached --quiet || git commit -m "pipeline run $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git pull --rebase origin main || true
+          git push
