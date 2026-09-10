@@ -19,6 +19,7 @@ from datetime import date
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import config  # noqa: F401  (side effect: loads .env)
 
@@ -53,7 +54,7 @@ def md_to_html(md: str) -> str:
 
 
 def send_digest(target_date: str = None) -> None:
-    d = target_date or date.today().isoformat()
+    d = target_date or datetime.now(ZoneInfo("America/New_York")).date().isoformat()
     path = DIGEST_DIR / f"digest_{d}.md"
     if not path.exists():
         raise SystemExit(f"no digest at {path} — run digest.py first")
