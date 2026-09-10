@@ -95,7 +95,7 @@ def normalize_fmp(rec: dict) -> dict:
     published = rec.get("publishedDate") or rec.get("date") or ""
     action = normalize_action(rec)
     return {
-        "event_hash": db.event_hash(ticker, firm, published, action),
+        "event_hash": db.event_hash(ticker, firm, published),
         "ticker": ticker,
         "published_at": published,
         "source": "fmp",
