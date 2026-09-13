@@ -19,12 +19,12 @@ def _load_dotenv(path: Path = Path(__file__).parent / ".env") -> None:
 _load_dotenv()
 
 # --- secrets / endpoints ---
-FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
-FMP_BASE = "https://financialmodelingprep.com/api/v4"
+
+FMP_BASE = "https://financialmodelingprep.com/stable"
 # Market-wide feed (preferred): pull everything daily, filter locally.
-FMP_RSS_ENDPOINT = f"{FMP_BASE}/upgrades-downgrades-rss-feed"
+FMP_RSS_ENDPOINT = f"{FMP_BASE}/grades-latest-news"
 # Per-symbol fallback:
-FMP_SYMBOL_ENDPOINT = f"{FMP_BASE}/upgrades-downgrades"
+FMP_SYMBOL_ENDPOINT = f"{FMP_BASE}/grades"
 
 # --- storage ---
 DB_PATH = Path(os.environ.get("RATINGS_DB", Path(__file__).parent / "ratings.db"))
