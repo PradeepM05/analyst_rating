@@ -28,6 +28,7 @@ def main():
     args = ap.parse_args()
 
     import db
+    import config  
     db.init_db()
     failures = []
 
