@@ -88,12 +88,39 @@ def is_foreign(ev: dict) -> bool:
     return any(tok in title for tok in FOREIGN_CURRENCY_TOKENS)
 
 
+import re
+
+# TheFly-style headline grammar. USD only — foreign currencies handled by the
+# foreign filter / enrichment path; never write non-USD numbers into PT fields.
+_PT_TO_FROM = re.compile(r"(?:price target|target)\s+(?:raised|lowered|cut|increased|reduced)?\s*to\s+\$([\d,]+(?:\.\d+)?)\s+from\s+\$([\d,]+(?:\.\d+)?)", re.I)
+_PT_TO_ONLY = re.compile(r"(?:price target|target)\s+(?:of\s+)?(?:raised|lowered|cut|increased|reduced)?\s*to\s+\$([\d,]+(?:\.\d+)?)", re.I)
+
+
+def extract_pt(title: str):
+    """Regex PT extraction from headline. Returns (new_pt, old_pt) — either may be None."""
+    if not title:
+        return None, None
+    m = _PT_TO_FROM.search(title)
+    if m:
+        return float(m.group(1).replace(",", "")), float(m.group(2).replace(",", ""))
+    m = _PT_TO_ONLY.search(title)
+    if m:
+        return float(m.group(1).replace(",", "")), None
+    return None, None
+
+
+def is_roundup_title(title: str) -> bool:
+    t = (title or "").lower()
+    return any(p in t for p in getattr(config, "ROUNDUP_TITLE_PATTERNS", ()))
+
+
 def normalize_fmp(rec: dict) -> dict:
     """FMP record -> unified event dict for db.insert_event."""
     ticker = (rec.get("symbol") or "").upper().strip()
     firm = rec.get("gradingCompany") or ""
     published = rec.get("publishedDate") or rec.get("date") or ""
     action = normalize_action(rec)
+    new_pt, old_pt = extract_pt(rec.get("newsTitle") or "")
     return {
         "event_hash": db.event_hash(ticker, firm, published),
         "ticker": ticker,
@@ -105,12 +132,13 @@ def normalize_fmp(rec: dict) -> dict:
         "analyst": rec.get("analyst"),           # usually absent on free tier; stored anyway
         "new_grade": rec.get("newGrade"),
         "previous_grade": rec.get("previousGrade"),
-        "new_pt": None,                           # numeric PTs live in newsTitle; enrichment extracts
-        "old_pt": None,
+        "new_pt": new_pt,                         # regex-extracted from headline (USD only);
+        "old_pt": old_pt,                         # enrichment LLM refines ambiguous cases
         "price_at_post": rec.get("priceWhenPosted"),
         "news_title": rec.get("newsTitle"),
         "news_url": rec.get("newsURL"),
         "news_publisher": rec.get("newsPublisher"),
+        "is_roundup": 1 if is_roundup_title(rec.get("newsTitle")) else 0,
         "raw_json": json.dumps(rec, separators=(",", ":")),
     }
 
@@ -161,6 +189,16 @@ def ingest_records(records: list, db_path=None) -> dict:
                 stats["inserted"] += 1
             else:
                 stats["duplicates"] += 1
+        # shared-URL roundup pass: 3+ events citing one URL on one day = aggregator piece
+        n_min = getattr(config, "ROUNDUP_SHARED_URL_MIN", 3)
+        marked = conn.execute(
+            """UPDATE events SET is_roundup = 1 WHERE is_roundup = 0 AND news_url IN (
+                 SELECT news_url FROM events
+                 WHERE news_url IS NOT NULL AND news_url != ''
+                 GROUP BY news_url, substr(published_at, 1, 10)
+                 HAVING COUNT(*) >= ?)""", (n_min,)).rowcount
+        if marked:
+            stats["marked_roundup"] = marked
         db.log_run(conn, date.today().isoformat(), "ingest", "ok", json.dumps(stats))
     return stats
 

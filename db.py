@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS events (
     news_title    TEXT,
     news_url      TEXT,
     news_publisher TEXT,
+    is_roundup    INTEGER NOT NULL DEFAULT 0,       -- flagged, still scored; excluded as cluster peer
     raw_json      TEXT NOT NULL                  -- full original payload, always
 );
 CREATE INDEX IF NOT EXISTS idx_events_ticker_date ON events(ticker, published_at);
@@ -84,6 +85,10 @@ def connect(db_path: Path = None):
 def init_db(db_path: Path = None) -> None:
     with connect(db_path) as conn:
         conn.executescript(SCHEMA)
+        # migrate pre-v1.1 DBs
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(events)")]
+        if "is_roundup" not in cols:
+            conn.execute("ALTER TABLE events ADD COLUMN is_roundup INTEGER NOT NULL DEFAULT 0")
 
 def event_hash(ticker: str, firm: str, published_date: str) -> str:
     """Dedupe key = event identity. Derived fields (action) deliberately excluded:
@@ -99,11 +104,11 @@ def insert_event(conn, ev: dict) -> bool:
             """INSERT INTO events (event_hash, ticker, published_at, source, action,
                    firm, firm_tier, analyst, new_grade, previous_grade,
                    new_pt, old_pt, price_at_post, news_title, news_url,
-                   news_publisher, raw_json)
+                   news_publisher, is_roundup, raw_json)
                VALUES (:event_hash, :ticker, :published_at, :source, :action,
                    :firm, :firm_tier, :analyst, :new_grade, :previous_grade,
                    :new_pt, :old_pt, :price_at_post, :news_title, :news_url,
-                   :news_publisher, :raw_json)""",
+                   :news_publisher, :is_roundup, :raw_json)""",
             ev,
         )
         return True

@@ -75,9 +75,11 @@ def cluster_count(conn, event) -> int:
            FROM events
            WHERE ticker = ? AND id != ? AND firm_tier IN ('tier1','tier2')
              AND published_at >= ? AND published_at <= ?
-             AND firm != ?""",
+             AND firm != ?
+             AND is_roundup = 0
+             AND (news_url IS NULL OR news_url != ?)""",
         (event["ticker"], event["id"], window_start, event["published_at"],
-         event["firm"] or ""),
+         event["firm"] or "", event["news_url"] or ""),
     ).fetchall()
 
     n = 0

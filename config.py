@@ -20,19 +20,17 @@ _load_dotenv()
 
 # --- secrets / endpoints ---
 FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
-FMP_BASE = "https://financialmodelingprep.com/stable"
+FMP_BASE = "https://financialmodelingprep.com/api/v4"
 # Market-wide feed (preferred): pull everything daily, filter locally.
-# Includes newsTitle/newsURL/priceWhenPosted like the old RSS feed did.
-FMP_RSS_ENDPOINT = f"{FMP_BASE}/grades-latest-news"
-# Per-symbol fallback: slimmer shape (no news fields on our plan tier),
-# normalize_fmp already falls back to rec["date"] when publishedDate is absent.
-FMP_SYMBOL_ENDPOINT = f"{FMP_BASE}/grades"
+FMP_RSS_ENDPOINT = f"{FMP_BASE}/upgrades-downgrades-rss-feed"
+# Per-symbol fallback:
+FMP_SYMBOL_ENDPOINT = f"{FMP_BASE}/upgrades-downgrades"
 
 # --- storage ---
 DB_PATH = Path(os.environ.get("RATINGS_DB", Path(__file__).parent / "ratings.db"))
 
 # --- config versioning (bump when you retune; old scores keep their version) ---
-CONFIG_VERSION = "v1.0"
+CONFIG_VERSION = "v1.1"
 
 # --- firm tiers ---
 TIER1 = {
@@ -56,11 +54,6 @@ def firm_tier(firm: str) -> str:
         return "tier2"
     return "other"
 
-# --- universe filter ---
-US_ONLY = True
-FOREIGN_CURRENCY_TOKENS = (" EUR ", " GBP ", " GBp ", " DKK ", " SEK ", " NOK ",
-                           " CHF ", " JPY ", " HKD ", " AUD ", " CAD ", " PLN ", " TRY ")
-
 # --- scoring constants (v1, reasoned priors — NOT fitted) ---
 BASE_ACTION = {
     "upgrade": 10, "downgrade": 10,
@@ -81,3 +74,10 @@ BUCKET_ACT = 20.0
 BUCKET_NOTABLE = 8.0
 BUCKET_LOG = 3.0
 ENRICH_THRESHOLD = 8.0
+
+# --- roundup detection (v1.1) ---
+ROUNDUP_TITLE_PATTERNS = (
+    "top calls", "top analyst", "what you missed", "fly by", "buy/sell:",
+    "morning movers", "wall street's top", "analyst roundup", "street calls",
+)
+ROUNDUP_SHARED_URL_MIN = 3   # 3+ events sharing one news_url same day = roundup
