@@ -31,6 +31,18 @@ def main():
     db.init_db()
     failures = []
 
+    for attr in ("FMP_API_KEY", "FMP_RSS_ENDPOINT", "CONFIG_VERSION"):
+        if not hasattr(config, attr):
+            print(f"FATAL: config.py missing {attr} — file is damaged")
+            sys.exit(1)
+    import os
+    missing = [k for k in ("FMP_API_KEY",) if not os.environ.get(k)]
+    if args.email:
+        missing += [k for k in ("GMAIL_ADDRESS", "GMAIL_APP_PASSWORD") if not os.environ.get(k)]
+    if missing:
+        print(f"FATAL: missing env/secrets: {missing}")
+        sys.exit(1)
+
     # 1. ingest — a failure here still lets us score/digest what's already stored
     try:
         import ingest

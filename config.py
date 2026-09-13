@@ -20,6 +20,8 @@ _load_dotenv()
 
 # --- secrets / endpoints ---
 
+# --- secrets / endpoints ---
+FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
 FMP_BASE = "https://financialmodelingprep.com/stable"
 # Market-wide feed (preferred): pull everything daily, filter locally.
 FMP_RSS_ENDPOINT = f"{FMP_BASE}/grades-latest-news"
