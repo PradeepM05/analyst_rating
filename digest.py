@@ -14,6 +14,7 @@ Output: digests/digest_YYYY-MM-DD.md
 import argparse
 import json
 from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 import config
@@ -21,8 +22,6 @@ import db
 import score as scorer
 
 DIGEST_DIR = Path(__file__).parent / "digests"
-from zoneinfo import ZoneInfo  # add to imports
-
 
 
 def load_events(conn, start: str, end: str):
@@ -38,60 +37,117 @@ def load_events(conn, start: str, end: str):
     ).fetchall()
 
 
-def fmt_event(r) -> str:
-    arrow = {1: "🟢▲", -1: "🔴▼", 0: "⚪"}[r["direction"]]
-    comp = json.loads(r["components"])
-    pt = ""
-    if r["new_pt"]:
-        pt = f" · PT ${r['old_pt']:g}→${r['new_pt']:g}" if r["old_pt"] else f" · PT ${r['new_pt']:g}"
-        if r["price_at_post"]:
-            upside = (r["new_pt"] - r["price_at_post"]) / r["price_at_post"] * 100
-            pt += f" ({upside:+.0f}% vs ${r['price_at_post']:g})"
-    elif r["price_at_post"]:
-        pt = f" · @ ${r['price_at_post']:g}"    
-    cluster = f" · 🔗{comp['cluster_peers']} peer(s)" if comp.get("cluster_peers") else ""
-    lines = [
-        f"**{r['ticker']}** {arrow} `{r['total']:.1f}` — {r['firm']} "
-        f"({r['action'].replace('_', ' ')}){pt}{cluster}",
-        f"  {r['news_title']}" if r["news_title"] else "",
-    ]
-    if r["llm_summary"]:
-        lines.append(f"  > {r['llm_summary']}")
+def _pt_str(r) -> str:
+    """PT display: change %% when both PTs known, implied upside vs current price."""
+    bits = []
+    if r["new_pt"] and r["old_pt"]:
+        chg = (r["new_pt"] - r["old_pt"]) / r["old_pt"] * 100
+        bits.append(f"PT ${r['old_pt']:g}\u2192${r['new_pt']:g} ({chg:+.0f}%)")
+    elif r["new_pt"]:
+        bits.append(f"PT ${r['new_pt']:g}")
+    if r["new_pt"] and r["price_at_post"]:
+        upside = (r["new_pt"] - r["price_at_post"]) / r["price_at_post"] * 100
+        bits.append(f"implied {upside:+.0f}% vs ${r['price_at_post']:g}")
+    return " \u00b7 ".join(bits)
+
+
+def _action_line(r) -> str:
+    arrow = {1: "\u25b2", -1: "\u25bc", 0: "\u00b7"}[r["direction"]]
+    pt = _pt_str(r)
+    line = f"  {arrow} `{r['total']:.1f}` {r['firm']} \u2014 {r['action'].replace('_', ' ')}"
+    if pt:
+        line += f" \u00b7 {pt}"
     if r["llm_catalyst"]:
-        lines.append(f"  _catalyst: {r['llm_catalyst']}_")
-    return "\n".join(l for l in lines if l)
+        line += f" \u00b7 _{r['llm_catalyst']}_"
+    return line
+
+
+def fmt_ticker_group(ticker: str, rows: list) -> str:
+    """One entry per ticker: header with combined signal, sub-lines per firm action."""
+    best = rows[0]
+    ups = sum(1 for r in rows if r["direction"] == 1)
+    downs = sum(1 for r in rows if r["direction"] == -1)
+    tier1 = sum(1 for r in rows if json.loads(r["components"]).get("firm_tier") == "tier1")
+    all_roundup = all(r["is_roundup"] for r in rows)
+    any_roundup = any(r["is_roundup"] for r in rows)
+
+    if ups and downs:
+        signal = f"\u26a1 mixed {ups}\u25b2/{downs}\u25bc"
+    elif ups:
+        signal = f"\U0001f7e2 {ups}\u25b2 bullish" if ups > 1 else "\U0001f7e2 \u25b2"
+    elif downs:
+        signal = f"\U0001f534 {downs}\u25bc bearish" if downs > 1 else "\U0001f534 \u25bc"
+    else:
+        signal = "\u26aa"
+
+    head = f"**{ticker}** {signal} \u00b7 top `{best['total']:.1f}`"
+    if best["price_at_post"]:
+        head += f" \u00b7 @ ${best['price_at_post']:g}"
+    if len(rows) > 1:
+        story = f"{len(rows)} firms acted"
+        if tier1:
+            story += f" ({tier1} Tier 1)"
+        head += f" \u00b7 {story}"
+    if any_roundup:
+        head += " \u00b7 \U0001f4f0 roundup-sourced" + (" (details unverified)" if all_roundup else "")
+
+    lines = [head]
+    lines += [_action_line(r) for r in rows]
+    # one title per unique headline, not per event
+    seen_titles = []
+    for r in rows:
+        t = r["news_title"]
+        if t and t not in seen_titles:
+            seen_titles.append(t)
+    for t in seen_titles[:2]:
+        lines.append(f"  \u2014 {t}")
+    for r in rows:
+        if r["llm_summary"]:
+            lines.append(f"  > {r['llm_summary']}")
+            break
+    return "\n".join(lines)
 
 
 def render(rows, start: str, end: str, narrative: str = "") -> str:
+    # group by ticker; a ticker's bucket = its best event's bucket
+    by_ticker = {}
+    for r in rows:
+        by_ticker.setdefault(r["ticker"], []).append(r)
+    for t in by_ticker:
+        by_ticker[t].sort(key=lambda r: -r["total"])
+
     buckets = {"act": [], "notable": [], "log": []}
     discarded = 0
-    for r in rows:
-        b = scorer.bucket(r["total"])
-        if b == "discard":
-            discarded += 1
-        else:
-            buckets[b].append(r)
+    shown_events = 0
+    for t, trs in sorted(by_ticker.items(), key=lambda kv: -kv[1][0]["total"]):
+        visible = [r for r in trs if scorer.bucket(r["total"]) != "discard"]
+        discarded += len(trs) - len(visible)
+        if not visible:
+            continue
+        b = scorer.bucket(visible[0]["total"])
+        buckets[b].append((t, visible))
+        shown_events += len(visible)
 
-    period = start if start == end else f"{start} → {end}"
-    out = [f"# Analyst Ratings Digest — {period}", ""]
+    period = start if start == end else f"{start} \u2192 {end}"
+    out = [f"# Analyst Ratings Digest \u2014 {period}", ""]
     if narrative:
         out += [narrative, ""]
-    out.append(f"_{len(rows)} events scored · config {config.CONFIG_VERSION} · "
-               f"{discarded} below digest threshold_")
+    out.append(f"_{len(rows)} events \u00b7 {len(by_ticker)} tickers \u00b7 config "
+               f"{config.CONFIG_VERSION} \u00b7 {discarded} below digest threshold_")
     out.append("")
 
-    titles = {"act": "🎯 Act / Investigate (20+)",
-              "notable": "📌 Notable (8–20)",
-              "log": "📋 Log (3–8)"}
+    titles = {"act": "\U0001f3af Act / Investigate (20+)",
+              "notable": "\U0001f4cc Notable (8\u201320)",
+              "log": "\U0001f4cb Log (3\u20138)"}
     for key in ("act", "notable", "log"):
         if not buckets[key]:
             continue
         out += [f"## {titles[key]}", ""]
-        for r in buckets[key]:
-            out += [fmt_event(r), ""]
+        for t, trs in buckets[key]:
+            out += [fmt_ticker_group(t, trs), ""]
 
     if not any(buckets.values()):
-        out.append("_Quiet day — nothing above the log threshold._")
+        out.append("_Quiet day \u2014 nothing above the log threshold._")
     out.append("\n---\n_Informational only. High score = high-information headline, "
                "not a buy signal. Not financial advice._")
     return "\n".join(out)
