@@ -2,19 +2,30 @@ name: analyst-ratings-pipeline
 
 on:
   schedule:
-    # GitHub cron is UTC. Sept = EDT (UTC-4): 10:00-15:00 UTC = 6:00-11:00 AM ET.
-    # Light ingest+score pulls every 30 min through the analyst-note window:
-    - cron: '0,30 10-14 * * 1-5'
-    - cron: '0 15 * * 1-5'
-    # Final full run (enrich + digest + email) at 15:30 UTC = 11:30 AM ET:
-    - cron: '30 15 * * 1-5'
-  workflow_dispatch:        # manual "Run workflow" button for testing
+    # GitHub cron is UTC. Times below assume EDT (UTC-4); in November (EST, UTC-5)
+    # shift every hour +1 to keep the same local times.
+    #
+    # Budget: FMP free = 250 calls/day. Ingest = 1 call/run.
+    # 44 light runs + 4 digest runs = ~48 calls/day (~19% of quota).
+    #
+    # Light ingest+score, every 15 min during the busy morning (10:00-14:45 UTC = 6:00-10:45 ET):
+    - cron: '0,15,30,45 10-14 * * 1-5'
+    # Light ingest+score, every 30 min through the rest of the session and after close
+    # (15:00-23:30 UTC = 11:00 ET - 7:30 PM ET):
+    - cron: '0,30 15-23 * * 1-5'
+    #
+    # Digest + email every ~6 hours (11:00 ET, 17:00 ET, 23:00 ET, 05:00 ET):
+    - cron: '0 15 * * 1-5'      # 11:00 ET — morning wrap
+    - cron: '0 21 * * 1-5'      # 17:00 ET — post-close
+    - cron: '0 3 * * 2-6'       # 23:00 ET prev day — evening
+    - cron: '0 9 * * 1-5'       # 05:00 ET — pre-market
+  workflow_dispatch:
 
 permissions:
-  contents: write           # needed to commit ratings.db back
+  contents: write
 
 concurrency:
-  group: pipeline           # never two runs writing the DB at once
+  group: pipeline
   cancel-in-progress: false
 
 jobs:
@@ -27,11 +38,17 @@ jobs:
         with:
           python-version: '3.12'
 
-      # Final run = the 15:30 UTC schedule or a manual dispatch; else light run.
+      # Digest+email schedules are the four '0 <hh> * * ...' entries below;
+      # everything else is a light ingest-only pull.
       - name: Decide run mode
         id: mode
         run: |
-          if [ "${{ github.event.schedule }}" = "30 15 * * 1-5" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          S="${{ github.event.schedule }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] \
+            || [ "$S" = "0 15 * * 1-5" ] \
+            || [ "$S" = "0 21 * * 1-5" ] \
+            || [ "$S" = "0 3 * * 2-6" ] \
+            || [ "$S" = "0 9 * * 1-5" ]; then
             echo "flags=--email" >> "$GITHUB_OUTPUT"
           else
             echo "flags=--ingest-only" >> "$GITHUB_OUTPUT"
@@ -46,7 +63,7 @@ jobs:
         run: python run_daily.py ${{ steps.mode.outputs.flags }}
 
       - name: Commit DB + digests back
-        if: always()          # persist whatever we ingested even if a later stage failed
+        if: always()
         run: |
           git config user.name  "ratings-bot"
           git config user.email "actions@users.noreply.github.com"

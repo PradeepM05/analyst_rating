@@ -28,21 +28,8 @@ def main():
     args = ap.parse_args()
 
     import db
-    import config  
     db.init_db()
     failures = []
-
-    for attr in ("FMP_API_KEY", "FMP_RSS_ENDPOINT", "CONFIG_VERSION"):
-        if not hasattr(config, attr):
-            print(f"FATAL: config.py missing {attr} — file is damaged")
-            sys.exit(1)
-    import os
-    missing = [k for k in ("FMP_API_KEY",) if not os.environ.get(k)]
-    if args.email:
-        missing += [k for k in ("GMAIL_ADDRESS", "GMAIL_APP_PASSWORD") if not os.environ.get(k)]
-    if missing:
-        print(f"FATAL: missing env/secrets: {missing}")
-        sys.exit(1)
 
     # 1. ingest — a failure here still lets us score/digest what's already stored
     try:
@@ -65,6 +52,14 @@ def main():
     if args.ingest_only:
         print("[3/4] enrich + [4/4] digest: skipped (ingest-only run)")
         sys.exit(1 if failures else 0)
+
+    # 2b. earnings calendar — one cheap call, powers proximity flags in the digest
+    try:
+        import earnings
+        print(f"[2b] earnings: {earnings.sync()}")
+    except Exception:
+        failures.append("earnings")
+        traceback.print_exc()
 
     # 3. enrich — optional garnish; digest ships without it
     if not args.skip_enrich:

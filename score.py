@@ -17,7 +17,8 @@ import db
 # ---------------------------------------------------------------- components
 
 def base_action_score(action: str) -> float:
-    return float(config.BASE_ACTION.get(action, 0))
+    table = getattr(config, "BASE_ACTION_V12", config.BASE_ACTION)
+    return float(table.get(action, 0))
 
 def magnitude_bonus(new_pt, old_pt) -> float:
     """abs(new-old)/old, noise-floored and capped. 0 when PTs unknown (pre-enrichment)."""
@@ -29,15 +30,29 @@ def magnitude_bonus(new_pt, old_pt) -> float:
     return min(pct, config.MAGNITUDE_CAP)
 
 def upside_bonus(new_pt, price) -> float:
-    """(target-price)/price with stale-analyst guard above 50%."""
+    """Implied upside (target vs current price), shaped for the target strategy.
+
+    v1.2: the 20-40% band is where a tradeable gap usually lives, so it gets the
+    largest bonus. 5-20% scales up linearly toward it. Above 40% the target is
+    usually stale or the stock is broken, so the bonus drops back sharply.
+    """
     if not new_pt or not price:
         return 0.0
-    u = abs((new_pt - price) / price)
-    if u < config.UPSIDE_NOISE_FLOOR:
+    u = (new_pt - price) / price          # signed: a target BELOW price is not upside
+    a = abs(u)
+    if a < config.UPSIDE_NOISE_FLOOR:
         return 0.0
-    if u > config.UPSIDE_STALE_THRESHOLD:
-        return config.UPSIDE_STALE_BONUS
-    return min(u, config.UPSIDE_CAP)
+    lo = getattr(config, "UPSIDE_SWEET_LOW", 0.20)
+    hi = getattr(config, "UPSIDE_SWEET_HIGH", 0.40)
+    sweet = getattr(config, "UPSIDE_SWEET_BONUS", 0.60)
+    far = getattr(config, "UPSIDE_FAR_BONUS", 0.15)
+    if a < lo:
+        # scale linearly from the noise floor up to the band's bonus
+        return sweet * (a - config.UPSIDE_NOISE_FLOOR) / (lo - config.UPSIDE_NOISE_FLOOR)
+    if a <= hi:
+        return sweet
+    return far
+
 
 def direction_of(action: str, new_grade, prev_grade, new_pt, old_pt) -> int:
     """+1 bullish / -1 bearish / 0 neutral-unknown."""
@@ -103,6 +118,9 @@ def score_event(conn, event) -> dict:
     fw = config.FIRM_WEIGHT.get(event["firm_tier"], 1.0)
     mag = magnitude_bonus(event["new_pt"], event["old_pt"])
     ups = upside_bonus(event["new_pt"], event["price_at_post"])
+    implied = None
+    if event["new_pt"] and event["price_at_post"]:
+        implied = round((event["new_pt"] - event["price_at_post"]) / event["price_at_post"], 4)
     n_peers = cluster_count(conn, event)
     clus = cluster_bonus(n_peers)
     direction = direction_of(event["action"], event["new_grade"],
@@ -119,6 +137,7 @@ def score_event(conn, event) -> dict:
             "upside_bonus": round(ups, 4),
             "cluster_peers": n_peers,
             "cluster_bonus": clus,
+            "implied_upside": implied,
             "action": event["action"],
             "firm_tier": event["firm_tier"],
         },

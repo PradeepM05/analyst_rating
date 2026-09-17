@@ -19,20 +19,18 @@ def _load_dotenv(path: Path = Path(__file__).parent / ".env") -> None:
 _load_dotenv()
 
 # --- secrets / endpoints ---
-
-# --- secrets / endpoints ---
 FMP_API_KEY = os.environ.get("FMP_API_KEY", "")
-FMP_BASE = "https://financialmodelingprep.com/stable"
+FMP_BASE = "https://financialmodelingprep.com/api/v4"
 # Market-wide feed (preferred): pull everything daily, filter locally.
-FMP_RSS_ENDPOINT = f"{FMP_BASE}/grades-latest-news"
+FMP_RSS_ENDPOINT = f"{FMP_BASE}/upgrades-downgrades-rss-feed"
 # Per-symbol fallback:
-FMP_SYMBOL_ENDPOINT = f"{FMP_BASE}/grades"
+FMP_SYMBOL_ENDPOINT = f"{FMP_BASE}/upgrades-downgrades"
 
 # --- storage ---
 DB_PATH = Path(os.environ.get("RATINGS_DB", Path(__file__).parent / "ratings.db"))
 
 # --- config versioning (bump when you retune; old scores keep their version) ---
-CONFIG_VERSION = "v1.1"
+CONFIG_VERSION = "v1.2"
 
 # --- firm tiers ---
 TIER1 = {
@@ -83,3 +81,29 @@ ROUNDUP_TITLE_PATTERNS = (
     "morning movers", "wall street's top", "analyst roundup", "street calls",
 )
 ROUNDUP_SHARED_URL_MIN = 3   # 3+ events sharing one news_url same day = roundup
+
+# --- v1.2: strategy-aligned scoring -------------------------------------
+# Target setup: PT raised well above current price, corroborated, short hold
+# for a 5-10% move. The 20-40% implied-upside band is the sweet spot; below
+# that there is little room to run, far above it usually means a broken stock
+# or a stale target rather than a tradeable gap.
+UPSIDE_SWEET_LOW = 0.20      # start of the band you care about
+UPSIDE_SWEET_HIGH = 0.40     # end of the band
+UPSIDE_SWEET_BONUS = 0.60    # bonus inside the band (was capped at 0.35)
+UPSIDE_FAR_BONUS = 0.15      # above the band: probably beaten-down/stale
+UPSIDE_NEAR_SCALE = 1.0      # 5-20%: linear, unchanged in spirit
+
+# PT-only moves matter more under this strategy than a bare rating word.
+BASE_ACTION_V12 = {"upgrade": 10, "downgrade": 10, "initiate_buy": 6,
+                   "initiate_sell": 6, "pt_change_only": 6, "reiterate": 0}
+
+# --- candidate filter (digest "Candidates" section) ---
+CANDIDATE_MIN_UPSIDE = 0.20        # implied upside vs price at post
+CANDIDATE_REQUIRE_PT_RAISE = True  # new_pt must exceed old_pt when both known
+CANDIDATE_MIN_SCORE = 5.0          # ignore noise
+CANDIDATE_ALLOW_UNCORROBORATED = True   # show, but mark corroboration level
+
+# --- earnings proximity (v1.2) ---
+FMP_EARNINGS_ENDPOINT = f"{FMP_BASE}/earnings-calendar"
+EARNINGS_RECENT_DAYS = 5     # "reported N days ago" window
+EARNINGS_UPCOMING_DAYS = 10  # "reports in N days" window

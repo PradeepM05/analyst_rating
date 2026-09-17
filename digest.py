@@ -37,6 +37,19 @@ def load_events(conn, start: str, end: str):
     ).fetchall()
 
 
+def is_candidate(r) -> bool:
+    """Your setup: PT raised, meaningful implied upside, not noise."""
+    if not r["new_pt"] or not r["price_at_post"]:
+        return False
+    if r["total"] < getattr(config, "CANDIDATE_MIN_SCORE", 5.0):
+        return False
+    if getattr(config, "CANDIDATE_REQUIRE_PT_RAISE", True):
+        if r["old_pt"] and r["new_pt"] <= r["old_pt"]:
+            return False
+    upside = (r["new_pt"] - r["price_at_post"]) / r["price_at_post"]
+    return upside >= getattr(config, "CANDIDATE_MIN_UPSIDE", 0.20)
+
+
 def _pt_str(r) -> str:
     """PT display: change %% when both PTs known, implied upside vs current price."""
     bits = []
@@ -60,6 +73,39 @@ def _action_line(r) -> str:
     if r["llm_catalyst"]:
         line += f" \u00b7 _{r['llm_catalyst']}_"
     return line
+
+
+def _earnings_note(conn, ticker: str, when: str) -> str:
+    if conn is None:
+        return ""
+    try:
+        import earnings as earn
+        label, _ = earn.proximity(conn, ticker, when)
+        return f" \u00b7 \U0001f4c5 {label}" if label else ""
+    except Exception:
+        return ""
+
+
+def fmt_candidate(r, note: str = "") -> str:
+    upside = (r["new_pt"] - r["price_at_post"]) / r["price_at_post"] * 100
+    chg = ""
+    if r["old_pt"]:
+        chg = f" (raised from ${r['old_pt']:g}, {((r['new_pt']-r['old_pt'])/r['old_pt']*100):+.0f}%)"
+    comp = json.loads(r["components"])
+    peers = comp.get("cluster_peers", 0)
+    corrob = (f"\u2713 {peers} independent peer(s) agree" if peers
+              else "\u26a0 no independent corroboration")
+    lines = [
+        f"**{r['ticker']}** \u2014 **{upside:+.0f}% implied upside** \u00b7 `{r['total']:.1f}`",
+        f"  PT ${r['new_pt']:g}{chg} vs ${r['price_at_post']:g} \u00b7 {r['firm']} "
+        f"({r['firm_tier']}){note}",
+        f"  {corrob}" + ("  \u00b7 \U0001f4f0 roundup-sourced" if r["is_roundup"] else ""),
+    ]
+    if r["news_title"]:
+        lines.append(f"  \u2014 {r['news_title']}")
+    if r["llm_summary"]:
+        lines.append(f"  > {r['llm_summary']}")
+    return "\n".join(lines)
 
 
 def fmt_ticker_group(ticker: str, rows: list) -> str:
@@ -108,7 +154,7 @@ def fmt_ticker_group(ticker: str, rows: list) -> str:
     return "\n".join(lines)
 
 
-def render(rows, start: str, end: str, narrative: str = "") -> str:
+def render(rows, start: str, end: str, narrative: str = "", conn=None) -> str:
     # group by ticker; a ticker's bucket = its best event's bucket
     by_ticker = {}
     for r in rows:
@@ -135,6 +181,17 @@ def render(rows, start: str, end: str, narrative: str = "") -> str:
     out.append(f"_{len(rows)} events \u00b7 {len(by_ticker)} tickers \u00b7 config "
                f"{config.CONFIG_VERSION} \u00b7 {discarded} below digest threshold_")
     out.append("")
+
+    # --- Candidates: the setup you actually trade ---
+    # rank by score: it already encodes firm tier, the 20-40% upside band,
+    # and independent corroboration — raw upside alone flatters stale targets.
+    cands = sorted([r for r in rows if is_candidate(r)], key=lambda r: -r["total"])
+    if cands:
+        out += ["## \U0001f3af Candidates \u2014 PT raised, "
+                f"\u2265{int(getattr(config, 'CANDIDATE_MIN_UPSIDE', 0.2)*100)}% implied upside", ""]
+        for r in cands:
+            out += [fmt_candidate(r, _earnings_note(conn, r["ticker"], r["published_at"])), ""]
+        out += ["_Screening output \u2014 verify independently before acting._", ""]
 
     titles = {"act": "\U0001f3af Act / Investigate (20+)",
               "notable": "\U0001f4cc Notable (8\u201320)",
@@ -184,7 +241,7 @@ def run(target_date: str = None, days: int = 1, narrative: bool = False) -> Path
     with db.connect() as conn:
         rows = load_events(conn, start, end)
         intro = build_narrative(rows) if narrative else ""
-        text = render(rows, start, end, intro)
+        text = render(rows, start, end, intro, conn=conn)
         db.log_run(conn, end, "digest", "ok", f"{len(rows)} events")
 
     DIGEST_DIR.mkdir(exist_ok=True)
