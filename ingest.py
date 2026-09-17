@@ -92,9 +92,8 @@ import re
 
 # TheFly-style headline grammar. USD only — foreign currencies handled by the
 # foreign filter / enrichment path; never write non-USD numbers into PT fields.
-_PT_TO_FROM = re.compile(r"(?:price target|target)\s+(?:raised|lowered|cut|increased|reduced)?\s*to\s+\$([\d,]+(?:\.\d+)?)\s+from\s+\$([\d,]+(?:\.\d+)?)", re.I)
-_PT_TO_ONLY = re.compile(r"(?:price target|target)\s+(?:of\s+)?(?:raised|lowered|cut|increased|reduced)?\s*to\s+\$([\d,]+(?:\.\d+)?)", re.I)
-
+_PT_TO_FROM = re.compile(r"(?:price\s?target|target)\s+(?:raised|lowered|cut|increased|reduced)?\s*to\s+\$([\d,]+(?:\.\d+)?)\s+from\s+\$([\d,]+(?:\.\d+)?)", re.I)
+_PT_TO_ONLY = re.compile(r"(?:price\s?target|target)\s+(?:of\s+)?(?:raised|lowered|cut|increased|reduced)?\s*to\s+\$([\d,]+(?:\.\d+)?)", re.I)
 
 def extract_pt(title: str):
     """Regex PT extraction from headline. Returns (new_pt, old_pt) — either may be None."""
